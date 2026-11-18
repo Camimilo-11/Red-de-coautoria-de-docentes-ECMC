@@ -5,3 +5,5 @@ venv/
 .DS_Store
 # El Excel original no se sube: la app usa solo los CSV derivados de data/
 *.xlsx
+# Nunca subir claves de API al repo
+.streamlit/secrets.toml

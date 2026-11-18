@@ -34,6 +34,12 @@ def main(ruta_excel: str) -> None:
     ol = ol[ol["id_obra"].isin(dp["id_obra"])].dropna().drop_duplicates()
     ol.to_csv(SALIDA / "obra_sublinea.csv", index=False)
 
+    pub = xl.parse("Publicaciones")
+    pub = pub[pub["ID obra"].isin(dp["id_obra"])][["ID obra", "Año de análisis", "Título corregido", "Revista o fuente"]]
+    pub.columns = ["id_obra", "anio", "titulo", "fuente"]
+    pub["anio"] = pub["anio"].astype(int)
+    pub.to_csv(SALIDA / "obras.csv", index=False)
+
     ls = xl.parse("Lineas_y_Sublineas")
     ls.columns = ["id_linea", "linea", "id_sublinea", "sublinea"]
     ls.to_csv(SALIDA / "lineas.csv", index=False)

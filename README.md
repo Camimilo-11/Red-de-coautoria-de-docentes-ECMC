@@ -9,6 +9,7 @@ qué pares de docentes probablemente colaborarán.
 | Pestaña | Contenido |
 |---|---|
 | 🕸️ Red | Grafo interactivo con colores por departamento, filtro por año y colaboraciones predichas (en punteado) |
+| 💬 Pregúntale a la red | **Graph RAG**: pregunta en lenguaje natural → recuperación en el grafo → respuesta de Claude con citas |
 | 🧭 Perfil temático | Mapa de calor docente × línea de investigación |
 | 🗺️ Mapa de embeddings | Proyección t-SNE de los embeddings que aprende GraphSAGE |
 | 🤝 Recomendador | Top 5 colaboradores sugeridos para cada docente, con sublíneas en común y el camino que los une en la red |
@@ -39,6 +40,7 @@ qué pares de docentes probablemente colaborarán.
 
 ```
 app.py               ← la app de Streamlit
+graphrag.py          ← Graph RAG: enlace de entidades, recuperación en el grafo y llamada a Claude
 modelo.py            ← GraphSAGE (forward en NumPy), atributos y líneas base
 model.pkl            ← pesos entrenados + resultados de evaluación
 train.py             ← re-entrena y regenera model.pkl
@@ -47,6 +49,22 @@ requirements.txt
 data/                ← CSV derivados que lee la app
 .streamlit/config.toml
 ```
+
+## Graph RAG
+
+1. **Enlace de entidades.** Se detectan docentes nombrados, departamentos y sublíneas (diccionario de términos en español e inglés), y se buscan obras por similitud TF-IDF de n-gramas de caracteres sobre los títulos.
+2. **Recuperación en el grafo.** Se eligen los docentes semilla, se expanden a sus coautores (1 salto) y se calculan los caminos más cortos entre los docentes nombrados (multi-salto). Si se pregunta por el futuro, se agregan las colaboraciones que predice GraphSAGE.
+3. **Contexto.** Se arma una lista de hechos numerados: perfiles, coautorías con un título de ejemplo, caminos y predicciones.
+4. **Generación.** Claude (`claude-opus-5-5` por defecto) responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas.
+
+**Clave de API:** en Streamlit Community Cloud ve a *Manage app → Settings → Secrets* y agrega:
+
+```toml
+ANTHROPIC_API_KEY = "sk-ant-..."
+# CLAUDE_MODEL = "claude-opus-5-5"   # opcional
+```
+
+Sin clave, la pestaña funciona en modo extractivo: muestra el subgrafo y los hechos recuperados, sin redactar la respuesta. **Nunca subas la clave al repo**; `.streamlit/secrets.toml` está en `.gitignore`.
 
 ## Ejecutar en local
 

@@ -15,6 +15,7 @@ import streamlit.components.v1 as components
 from pyvis.network import Network
 from sklearn.manifold import TSNE
 
+import graphrag as R
 import modelo as M
 
 RAIZ = Path(__file__).parent
@@ -113,12 +114,12 @@ sel = doc[doc["departamento"].isin(deps)]["id"].tolist()
 sel_set = set(sel)
 
 st.title("Red de coautoría de docentes ECMC")
-st.caption("¿Quién colabora con quién, y quién debería colaborar? Predicción de enlaces con GraphSAGE, "
-           "que razona sobre vecinos a 2 saltos: el mismo principio que usa un Graph RAG (p. ej. GNN-RAG) "
-           "para recuperar información por relaciones.")
+st.caption("¿Quién colabora con quién, y quién debería colaborar? Predicción de enlaces con GraphSAGE y preguntas "
+           "en lenguaje natural con Graph RAG (recuperación en el grafo + respuesta generada por Claude).")
 
-tab_red, tab_perfil, tab_emb, tab_rec, tab_eval = st.tabs(
-    ["🕸️ Red", "🧭 Perfil temático", "🗺️ Mapa de embeddings", "🤝 Recomendador", "📈 Evaluación"])
+tab_red, tab_rag, tab_perfil, tab_emb, tab_rec, tab_eval = st.tabs(
+    ["🕸️ Red", "💬 Pregúntale a la red", "🧭 Perfil temático", "🗺️ Mapa de embeddings", "🤝 Recomendador",
+     "📈 Evaluación"])
 
 # ------------------------------------------------------------------ 1. red
 with tab_red:
@@ -248,6 +249,14 @@ with tab_rec:
                      column_config={"Probabilidad": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1)})
     st.caption(f"Top 5 docentes con los que {nombre_de[elegido]} aún no ha publicado, según el ensamble de "
                f"10 modelos entrenados con toda la red hasta {corte_final}. Color de barra = departamento.")
+    actuales = coaut[(coaut["a"] == elegido) | (coaut["b"] == elegido)].copy()
+    if len(actuales):
+        actuales["Coautor actual"] = [nombre_de[b if a == elegido else a] for a, b in zip(actuales["a"], actuales["b"])]
+        actuales["Departamento"] = actuales["Coautor actual"].map(dict(zip(doc["nombre"], doc["departamento"])))
+        actuales = actuales.rename(columns={"n_obras": "Obras conjuntas", "primer_anio": "Desde", "ultimo_anio": "Hasta"})
+        st.markdown("**Colaboraciones que ya existen** (por eso no aparecen como recomendación):")
+        st.dataframe(actuales[["Coautor actual", "Departamento", "Obras conjuntas", "Desde", "Hasta"]]
+                     .sort_values("Obras conjuntas", ascending=False), hide_index=True, width="stretch")
 
 # ------------------------------------------------------------------ 5. evaluación
 with tab_eval:
@@ -303,3 +312,101 @@ with tab_eval:
             "de sus atributos, mientras que las heurísticas estructurales le asignan puntaje 0.\n"
             "- **Limitaciones:** red pequeña (33 positivos de prueba, 12 en el subconjunto sin historial), "
             "los perfiles temáticos se infieren de los títulos y 7 docentes no tienen producción formal.")
+
+# ------------------------------------------------------------------ 6. Graph RAG
+def secreto(nombre, defecto=None):
+    try:
+        return st.secrets.get(nombre, defecto)
+    except Exception:          # sin archivo de secrets en local
+        return defecto
+
+
+@st.cache_resource
+def indice_rag(_datos, _coaut, _pred, _comunidades):
+    return R.IndiceGraphRAG(_datos, _coaut, _pred, _comunidades)
+
+
+@st.cache_data(show_spinner=False, ttl=6 * 3600)
+def respuesta_cacheada(pregunta, contexto_txt, modelo, _ctx, _clave):
+    # La caché se indexa por pregunta + contexto + modelo: repetir una pregunta no vuelve a llamar a la API
+    return R.responder_con_claude(pregunta, _ctx, _clave, modelo)
+
+
+EJEMPLOS = [
+    "¿Quién de Computación trabaja en visión computacional y ha colaborado con alguien de Matemáticas?",
+    "¿Cómo está conectado Hugo Leiva con Diego Peluffo?",
+    "¿Con quién debería colaborar Peluffo en el futuro?",
+    "¿Qué docentes trabajan en ecuaciones diferenciales y quiénes son sus coautores?",
+    "¿Quiénes son los docentes más conectados de la red?",
+]
+
+
+def poner_pregunta(texto):
+    st.session_state["pregunta_rag"] = texto
+
+
+with tab_rag:
+    clave = secreto("ANTHROPIC_API_KEY")
+    modelo_llm = secreto("CLAUDE_MODEL", R.MODELO_POR_DEFECTO)
+    indice = indice_rag(datos, coaut, pred, comunidad_de)
+    st.markdown(
+        "**Graph RAG.** Escribe una pregunta: la app identifica docentes, departamentos y temas, recorre el grafo "
+        "(coautores, caminos y colaboraciones predichas por GraphSAGE), arma un contexto de hechos numerados y "
+        "Claude redacta la respuesta citándolos.")
+    st.pills("Ejemplos (clic para usar)", EJEMPLOS, key="ejemplo_rag",
+             on_change=lambda: poner_pregunta(st.session_state["ejemplo_rag"] or st.session_state["pregunta_rag"]))
+    st.session_state.setdefault("pregunta_rag", EJEMPLOS[0])
+    with st.form("form_rag"):
+        pregunta = st.text_input("Pregunta", key="pregunta_rag")
+        enviar = st.form_submit_button("Preguntar", type="primary")
+    if enviar and pregunta.strip():
+        st.session_state["consulta_rag"] = pregunta.strip()
+    consulta = st.session_state.get("consulta_rag")
+
+    if consulta:
+        ctx = indice.recuperar(consulta)
+        e = ctx.entidades
+        col_resp, col_graf = st.columns([5, 4])
+        with col_resp:
+            st.markdown(f"**Pregunta:** {consulta}")
+            if clave:
+                with st.spinner(f"Consultando a Claude ({modelo_llm})…"):
+                    r = respuesta_cacheada(consulta, ctx.texto(), modelo_llm, ctx, clave)
+                if r["texto"]:
+                    st.markdown(r["texto"])
+                    st.caption(f"Generado por {r.get('modelo', modelo_llm)} a partir de {len(ctx.hechos)} hechos "
+                               "recuperados del grafo. Los números entre corchetes remiten al contexto (abajo).")
+                else:
+                    st.error(r["error"])
+            else:
+                st.info("Modo sin LLM: falta `ANTHROPIC_API_KEY` en los *Secrets* de la app. Se muestran los "
+                        "hechos más relevantes que recuperó el grafo; con la clave, Claude los convierte en una respuesta.")
+                relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]
+                for h in relevantes[:10]:
+                    st.markdown(f"- {h.replace('; [semilla].', '.')}")
+            chips = ([f"👤 {nombre_de[d]}" for d in e["docentes"]] + [f"🏛️ {d}" for d in e["departamentos"]]
+                     + [f"🏷️ {indice.sub_nombre[s]}" for s in e["sublineas"][:6]]
+                     + [f"🎯 {i}" for i in e["intenciones"]])
+            st.caption("Entidades detectadas: " + (" · ".join(chips) if chips else "ninguna (se usan los docentes más conectados)"))
+        with col_graf:
+            semillas = set(ctx.semillas)
+            en_camino = {tuple(sorted(p)) for c in ctx.caminos if c[1] is not None for p in zip(c, c[1:])}
+            sub = Network(height="460px", width="100%", bgcolor="#fcfcfb", font_color="#0b0b0b", cdn_resources="in_line")
+            for d in ctx.nodos:
+                sub.add_node(d, label=corto_de[d], color=COLOR_DEP[dep_de[d]],
+                             size=24 if d in semillas else 12, borderWidth=4 if d in semillas else 1,
+                             title=f"{nombre_de[d]}\n{dep_de[d]}\n{'Semilla (relevante para la pregunta)' if d in semillas else 'Vecino en la red'}")
+            for a, b in ctx.aristas:
+                camino = tuple(sorted((a, b))) in en_camino
+                sub.add_edge(a, b, color=TINTA if camino else GRIS, width=5 if camino else 1.5)
+            for a, b, p in ctx.aristas_pred:
+                sub.add_edge(a, b, dashes=True, width=3, color="#6250d6", title=f"Predicha · p = {p:.2f}")
+            sub.set_options("""{"nodes": {"font": {"size": 13, "color": "#52514e", "strokeWidth": 3, "strokeColor": "#fcfcfb"},
+                                          "color": {"border": "#0b0b0b"}, "scaling": {"label": {"drawThreshold": 1}}},
+                                "edges": {"smooth": false},
+                                "physics": {"barnesHut": {"gravitationalConstant": -2500, "springLength": 90}}}""")
+            components.html(sub.generate_html(), height=480)
+            st.caption("Subgrafo recuperado · nodos grandes con borde = semillas · línea gruesa oscura = camino entre "
+                       "docentes nombrados · punteado violeta = colaboración predicha.")
+        with st.expander(f"Contexto recuperado que recibe el LLM ({len(ctx.hechos)} hechos)"):
+            st.text(ctx.texto())

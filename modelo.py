@@ -20,7 +20,8 @@ def cargar_datos(carpeta: Path = DATA) -> dict:
     part = pd.read_csv(carpeta / "participaciones.csv")
     obra_sub = pd.read_csv(carpeta / "obra_sublinea.csv")
     lineas = pd.read_csv(carpeta / "lineas.csv")
-    return {"docentes": docentes, "part": part, "obra_sub": obra_sub, "lineas": lineas}
+    obras = pd.read_csv(carpeta / "obras.csv")
+    return {"docentes": docentes, "part": part, "obra_sub": obra_sub, "lineas": lineas, "obras": obras}
 
 
 def coautorias(datos: dict) -> pd.DataFrame:

@@ -6,6 +6,7 @@ scikit-learn==1.9.1
 networkx==3.7
 plotly==7.1.0
 pyvis==0.3.2
+anthropic==2.10.0  # Graph RAG: generación de respuestas con Claude
 # Solo para re-entrenar (train.py) y regenerar los CSV (preparar_datos.py)
 autograd==1.9.1
 openpyxl==3.1.5
