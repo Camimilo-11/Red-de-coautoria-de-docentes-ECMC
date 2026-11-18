@@ -12,7 +12,7 @@ qué pares de docentes probablemente colaborarán.
 | 💬 Pregúntale a la red | **Graph RAG**: pregunta en lenguaje natural → recuperación en el grafo → respuesta de un LLM (GPT o Claude) con citas |
 | 🧭 Perfil temático | Mapa de calor docente × línea de investigación |
 | 🗺️ Mapa de embeddings | Proyección t-SNE de los embeddings que aprende GraphSAGE |
-| 🤝 Recomendador | Top 5 colaboradores sugeridos para cada docente, con sublíneas en común y el camino que los une en la red |
+| 🤝 Recomendador | Filtro **Nuevos / Existentes / Todos**: afinidad GraphSAGE con docentes con los que aún no publica y con sus coautores actuales (calculada ocultando la colaboración), estado activa/inactiva, sublíneas en común y camino en la red |
 | 📈 Evaluación | Curvas ROC, AUC con IC 95 % y comparación con líneas base |
 
 ## Modelo
@@ -29,6 +29,8 @@ qué pares de docentes probablemente colaborarán.
 | Similitud temática (coseno) | 0.725 | 0.548 |
 | Adamic-Adar | 0.627 | 0.500 |
 | Vecinos comunes | 0.626 | 0.500 |
+
+**Colaboraciones existentes.** También se evaluó si las colaboraciones existentes hasta 2023 se repiten en 2024–2026 (40 pares, 7 repitieron). Ni la afinidad de GraphSAGE (AUC 0.41) ni una regresión logística con 7 variables (AUC 0.45) lo anticiparon. La señal más útil fue la recencia (AUC 0.74, IC 95 % 0.58–0.86). Por eso la app muestra la afinidad y el estado de la colaboración, pero no una "probabilidad de repetir".
 
 **Limitaciones:**
 

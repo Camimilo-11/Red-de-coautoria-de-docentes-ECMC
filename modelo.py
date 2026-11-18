@@ -139,3 +139,59 @@ def heuristicas(aristas: np.ndarray, n: int, pares: np.ndarray, X_perfil: np.nda
     cos = (X_perfil[u] * X_perfil[v]).sum(1) / (nu[u] * nu[v])
     return {"Vecinos comunes": cn, "Adamic-Adar": aa, "Jaccard": jac,
             "Apego preferencial": pa, "Similitud temática (coseno)": cos}
+
+
+# ---------------------------------------------------------------- repetición de colaboraciones existentes
+VARIABLES_REP = ["log_obras_conjuntas", "anios_desde_ultima", "conjuntas_ultimos_3", "actividad_reciente_min",
+                 "similitud_tematica", "vecinos_comunes", "mismo_departamento"]
+NOMBRES_REP = {
+    "log_obras_conjuntas": "obras conjuntas (historial)",
+    "anios_desde_ultima": "años desde la última obra conjunta",
+    "conjuntas_ultimos_3": "obras conjuntas en los últimos 3 años",
+    "actividad_reciente_min": "actividad reciente de ambos",
+    "similitud_tematica": "similitud temática",
+    "vecinos_comunes": "coautores en común",
+    "mismo_departamento": "mismo departamento",
+}
+HORIZONTE_REP = 3
+
+
+def pares_por_obra(datos: dict) -> pd.DataFrame:
+    filas = []
+    for obra, g in datos["part"].groupby("id_obra"):
+        ids = sorted(set(g["id_docente"]))
+        anio = int(g["anio"].iloc[0])
+        filas += [(a, b, obra, anio) for a, b in combinations(ids, 2)]
+    return pd.DataFrame(filas, columns=["a", "b", "obra", "anio"])
+
+
+def variables_repeticion(datos: dict, pp: pd.DataFrame, t: int, horizonte: int = HORIZONTE_REP) -> pd.DataFrame:
+    """Una fila por par que ya colaboró hasta el año t, con variables calculadas SOLO con datos <= t.
+    La etiqueta `repite` indica si vuelven a publicar juntos en (t, t + horizonte]."""
+    hist = pp[pp["anio"] <= t]
+    if hist.empty:
+        return pd.DataFrame()
+    g = hist.groupby(["a", "b"]).agg(n=("obra", "nunique"), ultimo=("anio", "max")).reset_index()
+    rec = hist[hist["anio"] > t - 3].groupby(["a", "b"])["obra"].nunique()
+    g["conjuntas_ultimos_3"] = [rec.get((a, b), 0) for a, b in zip(g["a"], g["b"])]
+    part = datos["part"]
+    act = part[(part["anio"] <= t) & (part["anio"] > t - 3)].groupby("id_docente")["id_obra"].nunique()
+    g["actividad_reciente_min"] = np.log1p([min(act.get(a, 0), act.get(b, 0)) for a, b in zip(g["a"], g["b"])])
+    perfil = perfil_tematico(datos, t)
+    pa, pb = perfil.loc[g["a"]].to_numpy(), perfil.loc[g["b"]].to_numpy()
+    den = np.linalg.norm(pa, axis=1) * np.linalg.norm(pb, axis=1)
+    g["similitud_tematica"] = np.divide((pa * pb).sum(1), den, out=np.zeros(len(g)), where=den > 0)
+    vecinos = {}
+    for a, b in zip(g["a"], g["b"]):
+        vecinos.setdefault(a, set()).add(b)
+        vecinos.setdefault(b, set()).add(a)
+    g["vecinos_comunes"] = [len(vecinos[a] & vecinos[b]) for a, b in zip(g["a"], g["b"])]
+    dep = datos["docentes"].set_index("id")["departamento"]
+    g["mismo_departamento"] = (g["a"].map(dep) == g["b"].map(dep)).astype(float)
+    g["log_obras_conjuntas"] = np.log1p(g["n"])
+    g["anios_desde_ultima"] = t - g["ultimo"]
+    fut = pp[(pp["anio"] > t) & (pp["anio"] <= t + horizonte)].groupby(["a", "b"]).size()
+    g["repite"] = [int((a, b) in fut.index) for a, b in zip(g["a"], g["b"])]
+    g["corte"] = t
+    return g
+

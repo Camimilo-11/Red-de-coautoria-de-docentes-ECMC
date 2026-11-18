@@ -18,6 +18,7 @@ from datetime import date
 
 import autograd.numpy as anp
 import numpy as np
+import pandas as pd
 from autograd import grad
 from sklearn.metrics import average_precision_score, roc_auc_score, roc_curve
 
@@ -131,6 +132,43 @@ def main():
         print(f"{nombre:32s} AUC={resultados['global'][nombre]['auc']:.3f} "
               f"AP={resultados['global'][nombre]['ap']:.3f} | frío AUC={resultados['frio'][nombre]['auc']:.3f}")
 
+    # ---------------- ¿Las colaboraciones existentes se repiten? (evaluación, mismo protocolo temporal)
+    # Pares que ya colaboraron hasta CORTE; positivo = vuelven a publicar juntos en los 3 años siguientes.
+    from sklearn.linear_model import LogisticRegression
+    pp = M.pares_por_obra(datos)
+    H = M.HORIZONTE_REP
+    entreno = pd.concat([M.variables_repeticion(datos, pp, t) for t in range(2010, CORTE - H + 1)], ignore_index=True)
+    prueba = M.variables_repeticion(datos, pp, CORTE)
+    V = M.VARIABLES_REP
+    Xe = entreno[V].to_numpy(float)
+    mu, sd = Xe.mean(0), Xe.std(0)
+    sd[sd == 0] = 1
+    lr = LogisticRegression(C=1.0, max_iter=1000).fit((Xe - mu) / sd, entreno["repite"])
+    y_rep = prueba["repite"].to_numpy()
+    idx = {d: i for i, d in enumerate(nodos)}
+    afinidad = []
+    for a, b in zip(prueba["a"], prueba["b"]):   # GraphSAGE con la arista oculta: «¿la esperaría si no la viera?»
+        ia, ib = idx[a], idx[b]
+        sin = tr[[{x, w} != {ia, ib} for x, w in tr.tolist()]]
+        afinidad.append(float(M.predecir(params_eval, X, M.matriz_media(sin, n), np.array([[ia, ib]]))[0]))
+    puntajes_rep = {
+        "GraphSAGE (afinidad, arista oculta)": np.array(afinidad),
+        "Regresión logística (7 variables)": lr.predict_proba((prueba[V].to_numpy(float) - mu) / sd)[:, 1],
+        "Recencia (−años desde la última)": -prueba["anios_desde_ultima"].to_numpy(float),
+        "N.º de obras conjuntas": prueba["n"].to_numpy(float),
+        "Colaboró en los últimos 3 años": prueba["conjuntas_ultimos_3"].to_numpy(float),
+    }
+    curvas_rep = {k: curva(y_rep, v) for k, v in puntajes_rep.items()}
+    rng = np.random.default_rng(1)
+    for k, v in puntajes_rep.items():
+        bs = []
+        for _ in range(1000):
+            i = rng.integers(0, len(y_rep), len(y_rep))
+            if y_rep[i].min() != y_rep[i].max():
+                bs.append(roc_auc_score(y_rep[i], v[i]))
+        curvas_rep[k]["ic95"] = [float(np.percentile(bs, 2.5)), float(np.percentile(bs, 97.5))]
+        print(f"[repetición] {k:38s} AUC={curvas_rep[k]['auc']:.3f} IC95=[{curvas_rep[k]['ic95'][0]:.2f}, {curvas_rep[k]['ic95'][1]:.2f}]")
+
     # ---------------- modelo final con toda la red
     corte_final = int(datos["part"]["anio"].max())
     tr_f = M.aristas_hasta(coaut, nodos, corte_final)
@@ -147,6 +185,9 @@ def main():
         "corte_final": corte_final,
         "stats_pub_final": stats_f,
         "params_final": params_final,
+        "repeticion": {"corte": CORTE, "horizonte": H, "n_entreno": int(len(entreno)),
+                       "pos_entreno": int(entreno["repite"].sum()), "n_prueba": int(len(prueba)),
+                       "pos_prueba": int(y_rep.sum()), "curvas": curvas_rep},
         "evaluacion": {
             "n_candidatos": int(len(cand)), "n_positivos": int(y.sum()),
             "n_candidatos_frio": int(frio.sum()), "n_positivos_frio": int(y[frio].sum()),

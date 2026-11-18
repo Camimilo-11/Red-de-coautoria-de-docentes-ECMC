@@ -71,6 +71,23 @@ def inferencia(_paquete, corte_final):
     return cand, prob, xy
 
 
+@st.cache_data
+def afinidad_existentes(_paquete, corte_final):
+    """Para cada par que YA colaboró: probabilidad de GraphSAGE si se oculta esa colaboración del grafo.
+    Mide qué tan esperable es el par según temas y red (misma escala que las recomendaciones nuevas)."""
+    datos, coaut = cargar()
+    nodos = _paquete["nodos"]
+    n = len(nodos)
+    X, _ = M.atributos(datos, corte_final, tuple(_paquete["stats_pub_final"]))
+    ar = M.aristas_hasta(coaut, nodos, corte_final)
+    filas = []
+    for k, (i, j) in enumerate(ar.tolist()):
+        A = M.matriz_media(np.delete(ar, k, axis=0), n)
+        p = float(M.predecir(_paquete["params_final"], X, A, np.array([[i, j]]))[0])
+        filas.append((nodos[i], nodos[j], p))
+    return pd.DataFrame(filas, columns=["a", "b", "afinidad"])
+
+
 paquete = cargar_modelo()
 datos, coaut = cargar()
 doc = datos["docentes"].copy()
@@ -217,47 +234,98 @@ with tab_rec:
     if sin_prod:
         st.info(f"{len(sin_prod)} docentes no tienen producción formal registrada; el modelo no tiene datos "
                 "para recomendarles colaboradores y no aparecen aquí.")
-    elegido = st.selectbox("Docente", opciones, format_func=lambda d: f"{nombre_de[d]} ({dep_de[d]})")
+    c1, c2, c3 = st.columns([3, 3, 2])
+    elegido = c1.selectbox("Docente", opciones, format_func=lambda d: f"{nombre_de[d]} ({dep_de[d]})")
+    tipo = c2.segmented_control("Mostrar", ["Nuevos", "Existentes", "Todos"], default="Nuevos",
+                                help="Nuevos: aún no han publicado juntos. Existentes: ya publicaron juntos.")
+    tipo = tipo or "Nuevos"
+    top_n = c3.number_input("Cuántos", 3, 20, 8)
     perfil = M.perfil_tematico(datos, corte_final)
     sub_nombre = datos["lineas"].set_index("id_sublinea")["sublinea"]
-    filas = pred[(pred["a"] == elegido) | (pred["b"] == elegido)].head(5)
-    recs = []
-    for _, r in filas.iterrows():
-        otro = r["b"] if r["a"] == elegido else r["a"]
+
+    nuevos = pred[(pred["a"] == elegido) | (pred["b"] == elegido)].copy()
+    nuevos["otro"] = np.where(nuevos["a"] == elegido, nuevos["b"], nuevos["a"])
+    nuevos = nuevos.rename(columns={"prob": "afinidad"})[["otro", "afinidad"]]
+    nuevos["Tipo"] = "Nuevo"
+    afi = afinidad_existentes(paquete, corte_final)
+    exist = afi[(afi["a"] == elegido) | (afi["b"] == elegido)].copy()
+    exist["otro"] = np.where(exist["a"] == elegido, exist["b"], exist["a"])
+    exist = exist[["otro", "afinidad"]]
+    exist["Tipo"] = "Existente"
+    hist = coaut[(coaut["a"] == elegido) | (coaut["b"] == elegido)].copy()
+    hist["otro"] = np.where(hist["a"] == elegido, hist["b"], hist["a"])
+    exist = exist.merge(hist[["otro", "n_obras", "primer_anio", "ultimo_anio"]], on="otro", how="left")
+
+    if tipo == "Nuevos":
+        tabla_rec = nuevos.sort_values("afinidad", ascending=False)
+    elif tipo == "Existentes":   # ordenados por vigencia: la recencia fue la mejor señal de repetición
+        tabla_rec = exist.sort_values(["ultimo_anio", "n_obras"], ascending=False)
+    else:
+        tabla_rec = pd.concat([nuevos, exist]).sort_values("afinidad", ascending=False)
+    tabla_rec = tabla_rec[tabla_rec["otro"].isin(sel_set)].head(int(top_n))
+
+    filas = []
+    for _, r in tabla_rec.iterrows():
+        otro = r["otro"]
         comun = (perfil.loc[elegido] * perfil.loc[otro]).sort_values(ascending=False)
         comun = [sub_nombre[s] for s in comun[comun > 0].index[:2]]
-        try:
-            camino = nx.shortest_path(G_total, elegido, otro)
-            camino_txt = " → ".join(corto_de[c] for c in camino)
-        except nx.NetworkXNoPath:
-            camino_txt = "Sin camino en la red (recomendación por afinidad temática)"
-        recs.append({"Docente sugerido": nombre_de[otro], "Departamento": dep_de[otro],
-                     "Probabilidad": r["prob"], "Sublíneas en común": "; ".join(comun) or "—",
-                     "Camino actual en la red": camino_txt})
-    recs = pd.DataFrame(recs)
-    col_a, col_b = st.columns([2, 3])
-    with col_a:
-        fig = go.Figure(go.Bar(x=recs["Probabilidad"], y=recs["Docente sugerido"].map(nombre_corto), orientation="h",
-                               marker=dict(color=[COLOR_DEP[d] for d in recs["Departamento"]], cornerradius=4),
-                               text=[f"{p:.2f}" for p in recs["Probabilidad"]], textposition="outside",
-                               hovertemplate="%{y}: %{x:.2f}<extra></extra>"))
-        fig.update_layout(height=320, xaxis=dict(range=[0, 1.1], title="Probabilidad predicha"),
-                          yaxis=dict(autorange="reversed"), margin=dict(l=10, r=10, t=10, b=10),
-                          plot_bgcolor="#fcfcfb", bargap=0.35)
-        st.plotly_chart(fig, width="stretch")
-    with col_b:
-        st.dataframe(recs, hide_index=True, width="stretch",
-                     column_config={"Probabilidad": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1)})
-    st.caption(f"Top 5 docentes con los que {nombre_de[elegido]} aún no ha publicado, según el ensamble de "
-               f"10 modelos entrenados con toda la red hasta {corte_final}. Color de barra = departamento.")
-    actuales = coaut[(coaut["a"] == elegido) | (coaut["b"] == elegido)].copy()
-    if len(actuales):
-        actuales["Coautor actual"] = [nombre_de[b if a == elegido else a] for a, b in zip(actuales["a"], actuales["b"])]
-        actuales["Departamento"] = actuales["Coautor actual"].map(dict(zip(doc["nombre"], doc["departamento"])))
-        actuales = actuales.rename(columns={"n_obras": "Obras conjuntas", "primer_anio": "Desde", "ultimo_anio": "Hasta"})
-        st.markdown("**Colaboraciones que ya existen** (por eso no aparecen como recomendación):")
-        st.dataframe(actuales[["Coautor actual", "Departamento", "Obras conjuntas", "Desde", "Hasta"]]
-                     .sort_values("Obras conjuntas", ascending=False), hide_index=True, width="stretch")
+        fila = {"Docente": nombre_de[otro], "Departamento": dep_de[otro], "Tipo": r["Tipo"],
+                "Afinidad (GraphSAGE)": r["afinidad"], "Sublíneas en común": "; ".join(comun) or "—"}
+        if r["Tipo"] == "Existente":
+            activo = corte_final - int(r["ultimo_anio"]) < M.HORIZONTE_REP
+            fila.update({"Obras conjuntas": int(r["n_obras"]), "Última obra conjunta": int(r["ultimo_anio"]),
+                         "Estado": "🟢 Activa" if activo else "⚪ Inactiva"})
+        else:
+            try:
+                camino = nx.shortest_path(G_total, elegido, otro)
+                fila["Camino en la red"] = " → ".join(corto_de[c] for c in camino)
+            except nx.NetworkXNoPath:
+                fila["Camino en la red"] = "Sin camino (afinidad temática)"
+        filas.append(fila)
+    recs = pd.DataFrame(filas)
+    if recs.empty:
+        st.info("No hay colaboradores de este tipo para el docente elegido (revisa el filtro de departamentos).")
+    else:
+        orden_cols = ["Docente", "Tipo", "Estado", "Afinidad (GraphSAGE)", "Obras conjuntas", "Última obra conjunta",
+                      "Departamento", "Sublíneas en común", "Camino en la red"]
+        recs = recs[[c for c in orden_cols if c in recs.columns]]
+        for c in ("Obras conjuntas", "Última obra conjunta"):
+            if c in recs:
+                recs[c] = recs[c].map(lambda v: "—" if pd.isna(v) else str(int(v)))
+        for c in ("Estado", "Camino en la red"):
+            if c in recs:
+                recs[c] = recs[c].fillna("—")
+        col_a, col_b = st.columns([1, 1])
+        with col_a:
+            fig = go.Figure(go.Bar(
+                x=recs["Afinidad (GraphSAGE)"], y=recs["Docente"].map(nombre_corto), orientation="h",
+                marker=dict(color=[COLOR_DEP[d] for d in recs["Departamento"]], cornerradius=4,
+                            pattern=dict(shape=["/" if t == "Existente" else "" for t in recs["Tipo"]],
+                                         fgcolor="#fcfcfb", size=6)),
+                text=[f"{p:.2f}" for p in recs["Afinidad (GraphSAGE)"]], textposition="outside",
+                customdata=recs["Tipo"], hovertemplate="%{y} · %{customdata}: %{x:.2f}<extra></extra>"))
+            fig.update_layout(height=max(260, 42 * len(recs)), xaxis=dict(range=[0, 1.1], title="Afinidad estimada"),
+                              yaxis=dict(autorange="reversed"), margin=dict(l=10, r=10, t=10, b=10),
+                              plot_bgcolor="#fcfcfb", bargap=0.35)
+            st.plotly_chart(fig, width="stretch")
+        st.dataframe(recs, hide_index=True, width="stretch", column_config={
+            "Afinidad (GraphSAGE)": st.column_config.ProgressColumn(format="%.2f", min_value=0, max_value=1),
+            "Tipo": st.column_config.TextColumn(width="medium")})
+    rep = paquete.get("repeticion")
+    st.caption(
+        "**Afinidad** = probabilidad que asigna GraphSAGE (ensamble de 10 modelos, red hasta "
+        f"{corte_final}). Para colaboradores **existentes** se calcula ocultando su colaboración, así que mide qué "
+        "tan esperable es el par por temas y red, en la misma escala que los nuevos. Barras con rayas = existentes; "
+        "color = departamento.")
+    if tipo != "Nuevos" and rep:
+        c = rep["curvas"]
+        st.caption(
+            f"⚠️ La afinidad **no predice si una colaboración existente se repetirá**: en la evaluación temporal "
+            f"(pares que colaboraban hasta {rep['corte']}, {rep['pos_prueba']} de {rep['n_prueba']} repitieron en "
+            f"los {rep['horizonte']} años siguientes) obtuvo AUC {c['GraphSAGE (afinidad, arista oculta)']['auc']:.2f}. "
+            f"La mejor señal fue la recencia (AUC {c['Recencia (−años desde la última)']['auc']:.2f}), por eso los "
+            "existentes se ordenan por la última obra conjunta y se marca si la colaboración está activa "
+            f"(publicaron juntos en los últimos {rep['horizonte']} años). Detalle en la pestaña Evaluación.")
 
 # ------------------------------------------------------------------ 5. evaluación
 with tab_eval:
@@ -297,6 +365,21 @@ with tab_eval:
     col = "auc" if vista == "global" else "auc_frio"
     st.markdown(f"**Variabilidad entre semillas (modelos individuales):** AUC = {ps[col].mean():.3f} ± "
                 f"{ps[col].std():.3f} (media ± DE, n = {len(ps)}). El ensamble promedia las 10 predicciones.")
+
+    rep = paquete.get("repeticion")
+    if rep:
+        st.markdown("---")
+        st.markdown(
+            f"**¿Se repiten las colaboraciones existentes?** Pares que ya colaboraban hasta {rep['corte']} "
+            f"(n = {rep['n_prueba']}); positivo = vuelven a publicar juntos en los {rep['horizonte']} años siguientes "
+            f"({rep['pos_prueba']} casos). La regresión logística se entrenó con cortes anteriores "
+            f"({rep['n_entreno']} pares-año, {rep['pos_entreno']} positivos).")
+        st.dataframe(pd.DataFrame([{"Método": k, "AUC-ROC": round(v["auc"], 3),
+                                    "IC 95 %": f"[{v['ic95'][0]:.2f}, {v['ic95'][1]:.2f}]"}
+                                   for k, v in rep["curvas"].items()]), hide_index=True, width="stretch")
+        st.caption("Con tan pocos casos ningún modelo aprendido supera al azar de forma fiable; la recencia es la "
+                   "señal más útil, aunque su IC es amplio. Por eso la app no da una «probabilidad de repetir»: "
+                   "muestra la afinidad y el estado de la colaboración (activa/inactiva).")
 
     with st.expander("Cómo funciona el modelo"):
         st.markdown(
