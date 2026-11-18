@@ -113,7 +113,9 @@ sel = doc[doc["departamento"].isin(deps)]["id"].tolist()
 sel_set = set(sel)
 
 st.title("Red de coautoría de docentes ECMC")
-st.caption("¿Quién colabora con quién, y quién debería colaborar? Predicción de enlaces con GraphSAGE.")
+st.caption("¿Quién colabora con quién, y quién debería colaborar? Predicción de enlaces con GraphSAGE, "
+           "que razona sobre vecinos a 2 saltos: el mismo principio que usa un Graph RAG (p. ej. GNN-RAG) "
+           "para recuperar información por relaciones.")
 
 tab_red, tab_perfil, tab_emb, tab_rec, tab_eval = st.tabs(
     ["🕸️ Red", "🧭 Perfil temático", "🗺️ Mapa de embeddings", "🤝 Recomendador", "📈 Evaluación"])
