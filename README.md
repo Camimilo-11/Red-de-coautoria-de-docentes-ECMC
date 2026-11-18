@@ -55,13 +55,13 @@ data/                ← CSV derivados que lee la app
 1. **Enlace de entidades.** Se detectan docentes nombrados, departamentos y sublíneas (diccionario de términos en español e inglés), y se buscan obras por similitud TF-IDF de n-gramas de caracteres sobre los títulos.
 2. **Recuperación en el grafo.** Se eligen los docentes semilla, se expanden a sus coautores (1 salto) y se calculan los caminos más cortos entre los docentes nombrados (multi-salto). Si se pregunta por el futuro, se agregan las colaboraciones que predice GraphSAGE.
 3. **Contexto.** Se arma una lista de hechos numerados: perfiles, coautorías con un título de ejemplo, caminos y predicciones.
-4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser un modelo abierto vía NVIDIA (`meta/llama-3.3-70b-instruct` por defecto), GPT (`gpt-5.4-mini`) o Claude (`claude-opus-5-5`).
+4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser un modelo abierto vía NVIDIA (Nemotron 3 por defecto, con respaldo automático si NVIDIA lo retira), GPT (`gpt-5.4-mini`) o Claude (`claude-opus-5-5`).
 
 **Clave de API:** en Streamlit Community Cloud ve a *Manage app → Settings → Secrets* y agrega:
 
 ```toml
 NVIDIA_API_KEY = "nvapi-..."         # build.nvidia.com (créditos gratuitos)
-# NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"   # opcional
+# NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"   # opcional; si está retirado, se prueba otro
 # o bien:
 OPENAI_API_KEY = "sk-..."
 # OPENAI_MODEL = "gpt-5.4-mini"      # opcional

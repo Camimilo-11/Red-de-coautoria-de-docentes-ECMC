@@ -367,34 +367,64 @@ def responder_con_openai(pregunta: str, ctx: Contexto, api_key: str, modelo: str
 
 
 # ------------------------------------------------------------ 5c. generación con NVIDIA (API compatible con OpenAI)
+# NVIDIA retira modelos con frecuencia (responden HTTP 410 «Gone»). Por eso se prueba una lista de candidatos,
+# se filtra con GET /v1/models y, si un modelo responde 404/410, se pasa al siguiente.
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_MODELO_POR_DEFECTO = "meta/llama-3.3-70b-instruct"
+NVIDIA_CANDIDATOS = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-20b",
+                     "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"]
+NVIDIA_MODELO_POR_DEFECTO = NVIDIA_CANDIDATOS[0]
+_NO_CHAT = ("embed", "rerank", "vl", "vision", "guard", "safety", "reward", "parse", "clip", "retriever")
+_modelo_nvidia_ok = {}          # clave de API -> modelo que respondió (se reutiliza)
 
 
-def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str = NVIDIA_MODELO_POR_DEFECTO) -> dict:
+def _candidatos_nvidia(cliente, preferido):
+    lista = [m for m in [preferido] + NVIDIA_CANDIDATOS if m]
+    try:
+        disponibles = [m.id for m in cliente.models.list()]
+    except Exception:
+        return list(dict.fromkeys(lista))
+    if not disponibles:
+        return list(dict.fromkeys(lista))
+    elegidos = [m for m in lista if m in disponibles]
+    # Respaldo: cualquier modelo de chat que la cuenta vea
+    extra = [m for m in disponibles if not any(t in m.lower() for t in _NO_CHAT)
+             and any(t in m.lower() for t in ("nemotron", "gpt-oss", "instruct", "llama", "qwen", "mistral", "deepseek"))]
+    return list(dict.fromkeys(elegidos + extra))[:8]
+
+
+def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str | None = None) -> dict:
     """NVIDIA build.nvidia.com expone modelos abiertos con la API de Chat Completions de OpenAI."""
     import openai
 
     cliente = openai.OpenAI(api_key=api_key, base_url=NVIDIA_BASE_URL)
-    try:
-        r = cliente.chat.completions.create(
-            model=modelo,
-            messages=[{"role": "system", "content": SISTEMA},
-                      {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}],
-            max_tokens=2048,
-            temperature=0.2,
-        )
-    except openai.AuthenticationError:
-        return {"texto": None, "error": "La clave NVIDIA_API_KEY no es válida (debe empezar con «nvapi-»)."}
-    except openai.PermissionDeniedError:
-        return {"texto": None, "error": "La clave no tiene permiso para usar este modelo de NVIDIA."}
-    except openai.NotFoundError:
-        return {"texto": None, "error": f"El modelo «{modelo}» no está disponible en NVIDIA. Cambia NVIDIA_MODEL en Secrets."}
-    except openai.RateLimitError:
-        return {"texto": None, "error": "Límite de solicitudes o de créditos de NVIDIA alcanzado. Espera un minuto."}
-    except openai.APIStatusError as ex:
-        return {"texto": None, "error": f"Error de la API de NVIDIA ({ex.status_code}): {ex.message}"}
-    except openai.APIConnectionError:
-        return {"texto": None, "error": "No se pudo conectar con la API de NVIDIA."}
-    texto = (r.choices[0].message.content or "").strip() if r.choices else ""
-    return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}
+    mensajes = [{"role": "system", "content": SISTEMA},
+                {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}]
+    preferido = _modelo_nvidia_ok.get(api_key) or modelo
+    retirados = []
+    for m in _candidatos_nvidia(cliente, preferido):
+        extra = {"chat_template_kwargs": {"enable_thinking": False}} if "nemotron" in m else None
+        try:
+            r = cliente.chat.completions.create(model=m, messages=mensajes, max_tokens=4096,
+                                                temperature=0.2, extra_body=extra)
+        except (openai.NotFoundError, openai.BadRequestError) as ex:
+            retirados.append(m)            # modelo inexistente o que no acepta los parámetros: probar otro
+            continue
+        except openai.APIStatusError as ex:
+            if ex.status_code == 410:      # modelo retirado por NVIDIA
+                retirados.append(m)
+                continue
+            if ex.status_code in (401, 403):
+                return {"texto": None, "error": "La clave NVIDIA_API_KEY no es válida o no tiene permisos."}
+            if ex.status_code == 429:
+                return {"texto": None, "error": "Límite de solicitudes o de créditos de NVIDIA. Espera un minuto."}
+            return {"texto": None, "error": f"Error de la API de NVIDIA ({ex.status_code}) con «{m}»: {ex.message}"}
+        except openai.APIConnectionError:
+            return {"texto": None, "error": "No se pudo conectar con la API de NVIDIA."}
+        texto = (r.choices[0].message.content or "") if r.choices else ""
+        texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
+        if texto:
+            _modelo_nvidia_ok[api_key] = m
+            return {"texto": texto, "error": None, "modelo": m}
+        retirados.append(m)
+    return {"texto": None, "error": "Ningún modelo de NVIDIA respondió (probados: " + ", ".join(retirados) +
+            "). Elige uno en build.nvidia.com y ponlo en Secrets como NVIDIA_MODEL."}

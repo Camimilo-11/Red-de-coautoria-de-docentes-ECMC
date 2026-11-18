@@ -330,10 +330,14 @@ def indice_rag(_datos, _coaut, _pred, _comunidades):
 def respuesta_cacheada(pregunta, contexto_txt, proveedor, modelo, _ctx, _clave):
     # La caché se indexa por pregunta + contexto + modelo: repetir una pregunta no vuelve a llamar a la API
     if proveedor == "nvidia":
-        return R.responder_con_nvidia(pregunta, _ctx, _clave, modelo)
-    if proveedor == "openai":
-        return R.responder_con_openai(pregunta, _ctx, _clave, modelo)
-    return R.responder_con_claude(pregunta, _ctx, _clave, modelo)
+        r = R.responder_con_nvidia(pregunta, _ctx, _clave, modelo)
+    elif proveedor == "openai":
+        r = R.responder_con_openai(pregunta, _ctx, _clave, modelo)
+    else:
+        r = R.responder_con_claude(pregunta, _ctx, _clave, modelo)
+    if not r["texto"]:
+        raise RuntimeError(r["error"])    # los errores no se guardan en caché: el siguiente intento vuelve a llamar
+    return r
 
 
 EJEMPLOS = [
@@ -353,7 +357,7 @@ with tab_rag:
     # Proveedor del LLM según la clave que haya en Secrets (prioridad: NVIDIA > OpenAI > Anthropic)
     if secreto("NVIDIA_API_KEY"):
         proveedor, clave = "nvidia", secreto("NVIDIA_API_KEY")
-        modelo_llm = secreto("NVIDIA_MODEL", R.NVIDIA_MODELO_POR_DEFECTO)
+        modelo_llm = secreto("NVIDIA_MODEL", R.NVIDIA_MODELO_POR_DEFECTO)  # con respaldo automático si está retirado
     elif secreto("OPENAI_API_KEY"):
         proveedor, clave = "openai", secreto("OPENAI_API_KEY")
         modelo_llm = secreto("OPENAI_MODEL", R.OPENAI_MODELO_POR_DEFECTO)
@@ -383,7 +387,10 @@ with tab_rag:
             st.markdown(f"**Pregunta:** {consulta}")
             if clave:
                 with st.spinner(f"Consultando al LLM ({modelo_llm})…"):
-                    r = respuesta_cacheada(consulta, ctx.texto(), proveedor, modelo_llm, ctx, clave)
+                    try:
+                        r = respuesta_cacheada(consulta, ctx.texto(), proveedor, modelo_llm, ctx, clave)
+                    except RuntimeError as ex:
+                        r = {"texto": None, "error": str(ex)}
                 if r["texto"]:
                     st.markdown(r["texto"])
                     st.caption(f"Generado por {r.get('modelo', modelo_llm)} a partir de {len(ctx.hechos)} hechos "
