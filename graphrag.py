@@ -366,68 +366,91 @@ def responder_con_openai(pregunta: str, ctx: Contexto, api_key: str, modelo: str
     return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}
 
 
-# ------------------------------------------------------------ 5c. generación con NVIDIA (API compatible con OpenAI)
-# NVIDIA retira modelos con frecuencia (responden HTTP 410 «Gone»). Por eso se prueba una lista de candidatos,
-# se filtra con GET /v1/models y, si un modelo responde 404/410, se pasa al siguiente.
-NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
-NVIDIA_CANDIDATOS = ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-20b",
-                     "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"]
-NVIDIA_MODELO_POR_DEFECTO = NVIDIA_CANDIDATOS[0]
-_NO_CHAT = ("embed", "rerank", "vl", "vision", "guard", "safety", "reward", "parse", "clip", "retriever")
-_modelo_nvidia_ok = {}          # clave de API -> modelo que respondió (se reutiliza)
+# ------------------------------------------------------------ 5c. proveedores compatibles con la API de OpenAI
+# NVIDIA y Gemini aceptan el formato Chat Completions de OpenAI. Los proveedores retiran modelos con frecuencia
+# (HTTP 404/410) o no habilitan algunos para cada cuenta (403), así que se prueba una lista de candidatos,
+# filtrada con GET /v1/models, y el primero que responde se reutiliza.
+PROVEEDORES = {
+    "nvidia": {
+        "nombre": "NVIDIA", "base_url": "https://integrate.api.nvidia.com/v1", "secreto": "NVIDIA_API_KEY",
+        "candidatos": ["nvidia/nemotron-3-super-120b-a12b", "openai/gpt-oss-20b",
+                       "nvidia/nemotron-3.5-lightning-30b-a3b", "nvidia/nemotron-3-ultra-550b-a55b"],
+        "claves_chat": ("nemotron", "gpt-oss", "instruct", "llama", "qwen", "mistral", "deepseek"),
+    },
+    "gemini": {
+        "nombre": "Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "secreto": "GEMINI_API_KEY",
+        "candidatos": ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-2.5-flash", "gemini-3.5-flash-lite"],
+        "claves_chat": ("gemini",),
+    },
+}
+NVIDIA_MODELO_POR_DEFECTO = PROVEEDORES["nvidia"]["candidatos"][0]
+GEMINI_MODELO_POR_DEFECTO = PROVEEDORES["gemini"]["candidatos"][0]
+_NO_CHAT = ("embed", "rerank", "vl", "vision", "guard", "safety", "reward", "parse", "clip", "retriever",
+            "image", "tts", "audio", "live", "veo", "imagen", "aqa")
+_modelo_ok = {}                 # (proveedor, clave) -> modelo que respondió
 
 
-def _candidatos_nvidia(cliente, preferido):
-    lista = [m for m in [preferido] + NVIDIA_CANDIDATOS if m]
+def _candidatos(cliente, conf, preferido):
+    lista = list(dict.fromkeys(m for m in [preferido] + conf["candidatos"] if m))
     try:
-        disponibles = [m.id for m in cliente.models.list()]
+        disponibles = [m.id.removeprefix("models/") for m in cliente.models.list()]
     except Exception:
-        return list(dict.fromkeys(lista))
+        return lista
     if not disponibles:
-        return list(dict.fromkeys(lista))
+        return lista
     elegidos = [m for m in lista if m in disponibles]
-    # Respaldo: cualquier modelo de chat que la cuenta vea
     extra = [m for m in disponibles if not any(t in m.lower() for t in _NO_CHAT)
-             and any(t in m.lower() for t in ("nemotron", "gpt-oss", "instruct", "llama", "qwen", "mistral", "deepseek"))]
-    return list(dict.fromkeys(elegidos + extra))[:8]
+             and any(t in m.lower() for t in conf["claves_chat"])]
+    return list(dict.fromkeys(elegidos + extra))[:8] or lista
 
 
-def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str | None = None) -> dict:
-    """NVIDIA build.nvidia.com expone modelos abiertos con la API de Chat Completions de OpenAI."""
+def _parametros_extra(proveedor, modelo):
+    if proveedor == "nvidia" and "nemotron" in modelo:
+        return {"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+    if proveedor == "gemini":
+        return {"reasoning_effort": "low"}
+    return {}
+
+
+def responder_compatible(proveedor: str, pregunta: str, ctx: Contexto, api_key: str, modelo: str | None = None) -> dict:
     import openai
 
-    cliente = openai.OpenAI(api_key=api_key, base_url=NVIDIA_BASE_URL)
+    conf = PROVEEDORES[proveedor]
+    nombre = conf["nombre"]
+    cliente = openai.OpenAI(api_key=api_key, base_url=conf["base_url"])
     mensajes = [{"role": "system", "content": SISTEMA},
                 {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}]
-    preferido = _modelo_nvidia_ok.get(api_key) or modelo
+    preferido = _modelo_ok.get((proveedor, api_key)) or modelo
     retirados, sin_permiso = [], []
-    for m in _candidatos_nvidia(cliente, preferido):
-        extra = {"chat_template_kwargs": {"enable_thinking": False}} if "nemotron" in m else None
+    for m in _candidatos(cliente, conf, preferido):
         try:
-            r = cliente.chat.completions.create(model=m, messages=mensajes, max_tokens=4096,
-                                                temperature=0.2, extra_body=extra)
+            r = cliente.chat.completions.create(model=m, messages=mensajes, max_tokens=4096, temperature=0.2,
+                                                **_parametros_extra(proveedor, m))
         except (openai.NotFoundError, openai.BadRequestError) as ex:
+            if "api key" in str(ex).lower() or "api_key" in str(ex).lower():   # Gemini responde 400 si la clave es mala
+                return {"texto": None, "error": f"{nombre} rechazó la clave: no es válida. Revisa {conf['secreto']} en Secrets."}
             retirados.append(m)            # modelo inexistente o que no acepta los parámetros: probar otro
             continue
         except openai.APIStatusError as ex:
-            if ex.status_code == 410:      # modelo retirado por NVIDIA
+            if ex.status_code == 410:      # modelo retirado
                 retirados.append(m)
                 continue
             if ex.status_code == 401:
-                return {"texto": None, "error": "NVIDIA rechazó la clave (401): no es válida. Revisa que en Secrets "
-                        "esté completa, entre comillas, sin espacios y que empiece con «nvapi-»."}
+                return {"texto": None, "error": f"{nombre} rechazó la clave (401): no es válida. Revisa que en "
+                        f"Secrets ({conf['secreto']}) esté completa, entre comillas y sin espacios."}
             if ex.status_code == 403:      # la cuenta no tiene acceso a ESTE modelo: probar el siguiente
                 sin_permiso.append(m)
                 continue
             if ex.status_code == 429:
-                return {"texto": None, "error": "Límite de solicitudes o de créditos de NVIDIA. Espera un minuto."}
-            return {"texto": None, "error": f"Error de la API de NVIDIA ({ex.status_code}) con «{m}»: {ex.message}"}
+                return {"texto": None, "error": f"Límite de solicitudes o de cuota de {nombre}. Espera un minuto."}
+            return {"texto": None, "error": f"Error de la API de {nombre} ({ex.status_code}) con «{m}»: {ex.message}"}
         except openai.APIConnectionError:
-            return {"texto": None, "error": "No se pudo conectar con la API de NVIDIA."}
+            return {"texto": None, "error": f"No se pudo conectar con la API de {nombre}."}
         texto = (r.choices[0].message.content or "") if r.choices else ""
         texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
         if texto:
-            _modelo_nvidia_ok[api_key] = m
+            _modelo_ok[(proveedor, api_key)] = m
             return {"texto": texto, "error": None, "modelo": m}
         retirados.append(m)
     detalle = []
@@ -435,5 +458,13 @@ def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str
         detalle.append("retirados o no disponibles: " + ", ".join(retirados))
     if sin_permiso:
         detalle.append("sin permiso para tu cuenta (403): " + ", ".join(sin_permiso))
-    return {"texto": None, "error": "Ningún modelo de NVIDIA respondió (" + "; ".join(detalle) + "). Abre "
-            "build.nvidia.com, elige un modelo de chat que te deje probar y copia su ID en Secrets como NVIDIA_MODEL."}
+    return {"texto": None, "error": f"Ningún modelo de {nombre} respondió (" + "; ".join(detalle) + "). Si todos "
+            "dan 403, la cuenta dueña de la clave no tiene habilitada la generación de respuestas."}
+
+
+def responder_con_nvidia(pregunta, ctx, api_key, modelo=None):
+    return responder_compatible("nvidia", pregunta, ctx, api_key, modelo)
+
+
+def responder_con_gemini(pregunta, ctx, api_key, modelo=None):
+    return responder_compatible("gemini", pregunta, ctx, api_key, modelo)

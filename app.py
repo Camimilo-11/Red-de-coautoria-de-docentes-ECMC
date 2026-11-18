@@ -329,7 +329,9 @@ def indice_rag(_datos, _coaut, _pred, _comunidades):
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def respuesta_cacheada(pregunta, contexto_txt, proveedor, modelo, _ctx, _clave):
     # La caché se indexa por pregunta + contexto + modelo: repetir una pregunta no vuelve a llamar a la API
-    if proveedor == "nvidia":
+    if proveedor == "gemini":
+        r = R.responder_con_gemini(pregunta, _ctx, _clave, modelo)
+    elif proveedor == "nvidia":
         r = R.responder_con_nvidia(pregunta, _ctx, _clave, modelo)
     elif proveedor == "openai":
         r = R.responder_con_openai(pregunta, _ctx, _clave, modelo)
@@ -354,8 +356,11 @@ def poner_pregunta(texto):
 
 
 with tab_rag:
-    # Proveedor del LLM según la clave que haya en Secrets (prioridad: NVIDIA > OpenAI > Anthropic)
-    if secreto("NVIDIA_API_KEY"):
+    # Proveedor del LLM según la clave que haya en Secrets (prioridad: Gemini > NVIDIA > OpenAI > Anthropic)
+    if secreto("GEMINI_API_KEY"):
+        proveedor, clave = "gemini", str(secreto("GEMINI_API_KEY")).strip()
+        modelo_llm = secreto("GEMINI_MODEL", R.GEMINI_MODELO_POR_DEFECTO)  # con respaldo automático
+    elif secreto("NVIDIA_API_KEY"):
         proveedor, clave = "nvidia", str(secreto("NVIDIA_API_KEY")).strip().removeprefix("Bearer ").strip()
         modelo_llm = secreto("NVIDIA_MODEL", R.NVIDIA_MODELO_POR_DEFECTO)  # con respaldo automático si está retirado
     elif secreto("OPENAI_API_KEY"):
@@ -398,7 +403,7 @@ with tab_rag:
                 else:
                     st.error(r["error"])
             else:
-                st.info("Modo sin LLM: falta `NVIDIA_API_KEY`, `OPENAI_API_KEY` o `ANTHROPIC_API_KEY` en los *Secrets*. Se "
+                st.info("Modo sin LLM: falta una clave (`GEMINI_API_KEY`, `NVIDIA_API_KEY`, `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`) en los *Secrets*. Se "
                         "muestran los hechos más relevantes que recuperó el grafo; con la clave, el LLM los convierte "
                         "en una respuesta.")
                 relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]

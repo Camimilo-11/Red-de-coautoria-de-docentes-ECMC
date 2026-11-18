@@ -55,11 +55,14 @@ data/                ← CSV derivados que lee la app
 1. **Enlace de entidades.** Se detectan docentes nombrados, departamentos y sublíneas (diccionario de términos en español e inglés), y se buscan obras por similitud TF-IDF de n-gramas de caracteres sobre los títulos.
 2. **Recuperación en el grafo.** Se eligen los docentes semilla, se expanden a sus coautores (1 salto) y se calculan los caminos más cortos entre los docentes nombrados (multi-salto). Si se pregunta por el futuro, se agregan las colaboraciones que predice GraphSAGE.
 3. **Contexto.** Se arma una lista de hechos numerados: perfiles, coautorías con un título de ejemplo, caminos y predicciones.
-4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser un modelo abierto vía NVIDIA (Nemotron 3 por defecto, con respaldo automático si NVIDIA lo retira), GPT (`gpt-5.4-mini`) o Claude (`claude-opus-5-5`).
+4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser Gemini (`gemini-3.8-flash` por defecto, plan gratuito), un modelo abierto vía NVIDIA (Nemotron 3 por defecto, con respaldo automático si NVIDIA lo retira), GPT (`gpt-5.4-mini`) o Claude (`claude-opus-5-5`).
 
 **Clave de API:** en Streamlit Community Cloud ve a *Manage app → Settings → Secrets* y agrega:
 
 ```toml
+GEMINI_API_KEY = "..."               # aistudio.google.com (plan gratuito) — recomendado
+# GEMINI_MODEL = "gemini-3.8-flash"  # opcional; si no está disponible, se prueba otro
+# o bien:
 NVIDIA_API_KEY = "nvapi-..."         # build.nvidia.com (créditos gratuitos)
 # NVIDIA_MODEL = "nvidia/nemotron-3-super-120b-a12b"   # opcional; si está retirado, se prueba otro
 # o bien:
@@ -70,7 +73,7 @@ OPENAI_API_KEY = "sk-..."
 # CLAUDE_MODEL = "claude-opus-5-5"   # opcional
 ```
 
-Si hay varias claves, la prioridad es NVIDIA > OpenAI > Anthropic.
+Usa solo una clave. Si hay varias, la prioridad es Gemini > NVIDIA > OpenAI > Anthropic.
 
 Sin clave, la pestaña funciona en modo extractivo: muestra el subgrafo y los hechos recuperados, sin redactar la respuesta. **Nunca subas la clave al repo**; `.streamlit/secrets.toml` está en `.gitignore`.
 
