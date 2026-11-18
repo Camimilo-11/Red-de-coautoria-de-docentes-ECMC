@@ -400,7 +400,7 @@ def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str
     mensajes = [{"role": "system", "content": SISTEMA},
                 {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}]
     preferido = _modelo_nvidia_ok.get(api_key) or modelo
-    retirados = []
+    retirados, sin_permiso = [], []
     for m in _candidatos_nvidia(cliente, preferido):
         extra = {"chat_template_kwargs": {"enable_thinking": False}} if "nemotron" in m else None
         try:
@@ -413,8 +413,12 @@ def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str
             if ex.status_code == 410:      # modelo retirado por NVIDIA
                 retirados.append(m)
                 continue
-            if ex.status_code in (401, 403):
-                return {"texto": None, "error": "La clave NVIDIA_API_KEY no es válida o no tiene permisos."}
+            if ex.status_code == 401:
+                return {"texto": None, "error": "NVIDIA rechazó la clave (401): no es válida. Revisa que en Secrets "
+                        "esté completa, entre comillas, sin espacios y que empiece con «nvapi-»."}
+            if ex.status_code == 403:      # la cuenta no tiene acceso a ESTE modelo: probar el siguiente
+                sin_permiso.append(m)
+                continue
             if ex.status_code == 429:
                 return {"texto": None, "error": "Límite de solicitudes o de créditos de NVIDIA. Espera un minuto."}
             return {"texto": None, "error": f"Error de la API de NVIDIA ({ex.status_code}) con «{m}»: {ex.message}"}
@@ -426,5 +430,10 @@ def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str
             _modelo_nvidia_ok[api_key] = m
             return {"texto": texto, "error": None, "modelo": m}
         retirados.append(m)
-    return {"texto": None, "error": "Ningún modelo de NVIDIA respondió (probados: " + ", ".join(retirados) +
-            "). Elige uno en build.nvidia.com y ponlo en Secrets como NVIDIA_MODEL."}
+    detalle = []
+    if retirados:
+        detalle.append("retirados o no disponibles: " + ", ".join(retirados))
+    if sin_permiso:
+        detalle.append("sin permiso para tu cuenta (403): " + ", ".join(sin_permiso))
+    return {"texto": None, "error": "Ningún modelo de NVIDIA respondió (" + "; ".join(detalle) + "). Abre "
+            "build.nvidia.com, elige un modelo de chat que te deje probar y copia su ID en Secrets como NVIDIA_MODEL."}

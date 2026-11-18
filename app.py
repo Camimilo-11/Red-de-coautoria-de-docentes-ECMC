@@ -356,7 +356,7 @@ def poner_pregunta(texto):
 with tab_rag:
     # Proveedor del LLM según la clave que haya en Secrets (prioridad: NVIDIA > OpenAI > Anthropic)
     if secreto("NVIDIA_API_KEY"):
-        proveedor, clave = "nvidia", secreto("NVIDIA_API_KEY")
+        proveedor, clave = "nvidia", str(secreto("NVIDIA_API_KEY")).strip().removeprefix("Bearer ").strip()
         modelo_llm = secreto("NVIDIA_MODEL", R.NVIDIA_MODELO_POR_DEFECTO)  # con respaldo automático si está retirado
     elif secreto("OPENAI_API_KEY"):
         proveedor, clave = "openai", secreto("OPENAI_API_KEY")
