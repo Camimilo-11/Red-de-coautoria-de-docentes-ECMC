@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store
+# El Excel original no se sube: la app usa solo los CSV derivados de data/
+*.xlsx

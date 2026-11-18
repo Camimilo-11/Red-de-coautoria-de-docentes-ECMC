@@ -1,0 +1,47 @@
+id_linea,linea,id_sublinea,sublinea
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.differential,Ecuaciones Diferenciales ordinarias y/o parciales
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.analysis,Análisis Matemático y Numérico
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.control,Teoría de Control y/o Sincronización
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.dynamics,Sistemas Dinámicos
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.probability,Probabilidad y Estadística
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.algebra,Álgebra y Geometría
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.topology,Topología
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.discrete,Matemática Discreta y Lógica
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.complex,Análisis Complejo
+math,"Ecuaciones diferenciales, análisis matemático, modelamiento y optimización",math.matheducation,Didáctica de la Matemática
+data,Ciencia de datos,data.analysis,Análisis de Datos
+data,Ciencia de datos,data.databases,Bases de Datos
+data,Ciencia de datos,data.multivariate,Análisis Estadístico Multivariante
+data,Ciencia de datos,data.computationalstats,Estadística Computacional
+data,Ciencia de datos,data.mining,Minería de Datos
+data,Ciencia de datos,data.visualization,Visualización de Datos
+data,Ciencia de datos,data.ethics,Ética y Privacidad de Datos
+scientific,Computación científica,scientific.simulation,Modelamiento y Simulación
+scientific,Computación científica,scientific.hpc,Computación de Alto Rendimiento
+scientific,Computación científica,scientific.algorithms,Algoritmos
+scientific,Computación científica,scientific.numerical,Análisis Numérico
+scientific,Computación científica,scientific.theory,Teoría de Computación
+scientific,Computación científica,scientific.discrete,Estructuras Discretas
+scientific,Computación científica,scientific.visualization,Visualización Científica
+scientific,Computación científica,scientific.iot,Internet de las cosas (IoT)
+ai,Inteligencia artificial,ai.ml,Aprendizaje Automático
+ai,Inteligencia artificial,ai.deep,Aprendizaje Profundo
+ai,Inteligencia artificial,ai.vision,Visión Computacional
+ai,Inteligencia artificial,ai.llm,Large Language Models (LLMs)
+ai,Inteligencia artificial,ai.evolution,Computación Evolutiva
+ai,Inteligencia artificial,ai.business,AI for Business Strategy
+it,Tecnologías de la información,it.transport,Sistemas de Transporte Inteligente
+it,Tecnologías de la información,it.security,Seguridad Informática
+it,Tecnologías de la información,it.networks,Redes y Comunicaciones
+it,Tecnologías de la información,it.software,Software
+it,Tecnologías de la información,it.vr,Realidad Virtual y Realidad Aumentada
+it,Tecnologías de la información,it.cloud,Computación en la nube
+it,Tecnologías de la información,it.hci,Interacción Humano Computador
+society,"Ciencia, Tecnología y Sociedad",society.history,Historia y Filosofía de la ciencia y la tecnología
+society,"Ciencia, Tecnología y Sociedad",society.education,Teorías Educativas y Tecnologías de Aprendizaje Innovadoras
+society,"Ciencia, Tecnología y Sociedad",society.ethics,Ética pura y aplicada
+society,"Ciencia, Tecnología y Sociedad",society.enterprise,Empresa y emprendimiento
+society,"Ciencia, Tecnología y Sociedad",society.innovation,Innovación y tecnologías emergentes
+society,"Ciencia, Tecnología y Sociedad",society.opinion,Análisis de percepción de la opinión pública y redes de conexión social
+society,"Ciencia, Tecnología y Sociedad",society.communication,"Comunicación, Publicidad y Relaciones Públicas"
+society,"Ciencia, Tecnología y Sociedad",society.convergence,"Convergencia Interdisciplinaria en Ciencia, Tecnología y Comunicación para la Sociedad"
