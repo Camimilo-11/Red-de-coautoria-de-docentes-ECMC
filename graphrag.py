@@ -332,3 +332,35 @@ def responder_con_claude(pregunta: str, ctx: Contexto, api_key: str, modelo: str
         return {"texto": None, "error": "El modelo declinó responder esta pregunta."}
     texto = "".join(b.text for b in r.content if b.type == "text").strip()
     return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}
+
+
+# ------------------------------------------------------------ 5b. generación con OpenAI (alternativa)
+OPENAI_MODELO_POR_DEFECTO = "gpt-5.4-mini"
+
+
+def responder_con_openai(pregunta: str, ctx: Contexto, api_key: str, modelo: str = OPENAI_MODELO_POR_DEFECTO) -> dict:
+    """Misma interfaz que responder_con_claude, usando la Responses API de OpenAI."""
+    import openai
+
+    cliente = openai.OpenAI(api_key=api_key)
+    try:
+        r = cliente.responses.create(
+            model=modelo,
+            instructions=SISTEMA,
+            input=f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}",
+            max_output_tokens=4000,
+        )
+    except openai.AuthenticationError:
+        return {"texto": None, "error": "La clave OPENAI_API_KEY no es válida."}
+    except openai.PermissionDeniedError:
+        return {"texto": None, "error": "La clave no tiene permiso para usar este modelo."}
+    except openai.NotFoundError:
+        return {"texto": None, "error": f"El modelo «{modelo}» no existe para esta clave. Cambia OPENAI_MODEL en Secrets."}
+    except openai.RateLimitError:
+        return {"texto": None, "error": "Límite de uso alcanzado o sin saldo en la cuenta de OpenAI."}
+    except openai.APIStatusError as ex:
+        return {"texto": None, "error": f"Error de la API de OpenAI ({ex.status_code}): {ex.message}"}
+    except openai.APIConnectionError:
+        return {"texto": None, "error": "No se pudo conectar con la API de OpenAI."}
+    texto = (r.output_text or "").strip()
+    return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}

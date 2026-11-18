@@ -115,7 +115,7 @@ sel_set = set(sel)
 
 st.title("Red de coautoría de docentes ECMC")
 st.caption("¿Quién colabora con quién, y quién debería colaborar? Predicción de enlaces con GraphSAGE y preguntas "
-           "en lenguaje natural con Graph RAG (recuperación en el grafo + respuesta generada por Claude).")
+           "en lenguaje natural con Graph RAG (recuperación en el grafo + respuesta generada por un LLM).")
 
 tab_red, tab_rag, tab_perfil, tab_emb, tab_rec, tab_eval = st.tabs(
     ["🕸️ Red", "💬 Pregúntale a la red", "🧭 Perfil temático", "🗺️ Mapa de embeddings", "🤝 Recomendador",
@@ -327,8 +327,10 @@ def indice_rag(_datos, _coaut, _pred, _comunidades):
 
 
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
-def respuesta_cacheada(pregunta, contexto_txt, modelo, _ctx, _clave):
+def respuesta_cacheada(pregunta, contexto_txt, proveedor, modelo, _ctx, _clave):
     # La caché se indexa por pregunta + contexto + modelo: repetir una pregunta no vuelve a llamar a la API
+    if proveedor == "openai":
+        return R.responder_con_openai(pregunta, _ctx, _clave, modelo)
     return R.responder_con_claude(pregunta, _ctx, _clave, modelo)
 
 
@@ -346,13 +348,18 @@ def poner_pregunta(texto):
 
 
 with tab_rag:
-    clave = secreto("ANTHROPIC_API_KEY")
-    modelo_llm = secreto("CLAUDE_MODEL", R.MODELO_POR_DEFECTO)
+    # Proveedor del LLM según la clave que haya en Secrets (OpenAI tiene prioridad si están ambas)
+    if secreto("OPENAI_API_KEY"):
+        proveedor, clave = "openai", secreto("OPENAI_API_KEY")
+        modelo_llm = secreto("OPENAI_MODEL", R.OPENAI_MODELO_POR_DEFECTO)
+    else:
+        proveedor, clave = "anthropic", secreto("ANTHROPIC_API_KEY")
+        modelo_llm = secreto("CLAUDE_MODEL", R.MODELO_POR_DEFECTO)
     indice = indice_rag(datos, coaut, pred, comunidad_de)
     st.markdown(
         "**Graph RAG.** Escribe una pregunta: la app identifica docentes, departamentos y temas, recorre el grafo "
         "(coautores, caminos y colaboraciones predichas por GraphSAGE), arma un contexto de hechos numerados y "
-        "Claude redacta la respuesta citándolos.")
+        "un LLM redacta la respuesta citándolos.")
     st.pills("Ejemplos (clic para usar)", EJEMPLOS, key="ejemplo_rag",
              on_change=lambda: poner_pregunta(st.session_state["ejemplo_rag"] or st.session_state["pregunta_rag"]))
     st.session_state.setdefault("pregunta_rag", EJEMPLOS[0])
@@ -370,8 +377,8 @@ with tab_rag:
         with col_resp:
             st.markdown(f"**Pregunta:** {consulta}")
             if clave:
-                with st.spinner(f"Consultando a Claude ({modelo_llm})…"):
-                    r = respuesta_cacheada(consulta, ctx.texto(), modelo_llm, ctx, clave)
+                with st.spinner(f"Consultando al LLM ({modelo_llm})…"):
+                    r = respuesta_cacheada(consulta, ctx.texto(), proveedor, modelo_llm, ctx, clave)
                 if r["texto"]:
                     st.markdown(r["texto"])
                     st.caption(f"Generado por {r.get('modelo', modelo_llm)} a partir de {len(ctx.hechos)} hechos "
@@ -379,8 +386,9 @@ with tab_rag:
                 else:
                     st.error(r["error"])
             else:
-                st.info("Modo sin LLM: falta `ANTHROPIC_API_KEY` en los *Secrets* de la app. Se muestran los "
-                        "hechos más relevantes que recuperó el grafo; con la clave, Claude los convierte en una respuesta.")
+                st.info("Modo sin LLM: falta `OPENAI_API_KEY` (o `ANTHROPIC_API_KEY`) en los *Secrets* de la app. Se "
+                        "muestran los hechos más relevantes que recuperó el grafo; con la clave, el LLM los convierte "
+                        "en una respuesta.")
                 relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]
                 for h in relevantes[:10]:
                     st.markdown(f"- {h.replace('; [semilla].', '.')}")
