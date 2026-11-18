@@ -55,11 +55,14 @@ data/                ← CSV derivados que lee la app
 1. **Enlace de entidades.** Se detectan docentes nombrados, departamentos y sublíneas (diccionario de términos en español e inglés), y se buscan obras por similitud TF-IDF de n-gramas de caracteres sobre los títulos.
 2. **Recuperación en el grafo.** Se eligen los docentes semilla, se expanden a sus coautores (1 salto) y se calculan los caminos más cortos entre los docentes nombrados (multi-salto). Si se pregunta por el futuro, se agregan las colaboraciones que predice GraphSAGE.
 3. **Contexto.** Se arma una lista de hechos numerados: perfiles, coautorías con un título de ejemplo, caminos y predicciones.
-4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser GPT (`gpt-5.4-mini` por defecto) o Claude (`claude-opus-5-5` por defecto).
+4. **Generación.** Un LLM responde citando los hechos con [n] y distingue las colaboraciones reales de las predichas. Puede ser un modelo abierto vía NVIDIA (`meta/llama-3.3-70b-instruct` por defecto), GPT (`gpt-5.4-mini`) o Claude (`claude-opus-5-5`).
 
 **Clave de API:** en Streamlit Community Cloud ve a *Manage app → Settings → Secrets* y agrega:
 
 ```toml
+NVIDIA_API_KEY = "nvapi-..."         # build.nvidia.com (créditos gratuitos)
+# NVIDIA_MODEL = "meta/llama-3.3-70b-instruct"   # opcional
+# o bien:
 OPENAI_API_KEY = "sk-..."
 # OPENAI_MODEL = "gpt-5.4-mini"      # opcional
 # o bien, para usar Claude:
@@ -67,7 +70,7 @@ OPENAI_API_KEY = "sk-..."
 # CLAUDE_MODEL = "claude-opus-5-5"   # opcional
 ```
 
-Si están ambas claves, se usa la de OpenAI.
+Si hay varias claves, la prioridad es NVIDIA > OpenAI > Anthropic.
 
 Sin clave, la pestaña funciona en modo extractivo: muestra el subgrafo y los hechos recuperados, sin redactar la respuesta. **Nunca subas la clave al repo**; `.streamlit/secrets.toml` está en `.gitignore`.
 

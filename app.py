@@ -329,6 +329,8 @@ def indice_rag(_datos, _coaut, _pred, _comunidades):
 @st.cache_data(show_spinner=False, ttl=6 * 3600)
 def respuesta_cacheada(pregunta, contexto_txt, proveedor, modelo, _ctx, _clave):
     # La caché se indexa por pregunta + contexto + modelo: repetir una pregunta no vuelve a llamar a la API
+    if proveedor == "nvidia":
+        return R.responder_con_nvidia(pregunta, _ctx, _clave, modelo)
     if proveedor == "openai":
         return R.responder_con_openai(pregunta, _ctx, _clave, modelo)
     return R.responder_con_claude(pregunta, _ctx, _clave, modelo)
@@ -348,8 +350,11 @@ def poner_pregunta(texto):
 
 
 with tab_rag:
-    # Proveedor del LLM según la clave que haya en Secrets (OpenAI tiene prioridad si están ambas)
-    if secreto("OPENAI_API_KEY"):
+    # Proveedor del LLM según la clave que haya en Secrets (prioridad: NVIDIA > OpenAI > Anthropic)
+    if secreto("NVIDIA_API_KEY"):
+        proveedor, clave = "nvidia", secreto("NVIDIA_API_KEY")
+        modelo_llm = secreto("NVIDIA_MODEL", R.NVIDIA_MODELO_POR_DEFECTO)
+    elif secreto("OPENAI_API_KEY"):
         proveedor, clave = "openai", secreto("OPENAI_API_KEY")
         modelo_llm = secreto("OPENAI_MODEL", R.OPENAI_MODELO_POR_DEFECTO)
     else:
@@ -386,7 +391,7 @@ with tab_rag:
                 else:
                     st.error(r["error"])
             else:
-                st.info("Modo sin LLM: falta `OPENAI_API_KEY` (o `ANTHROPIC_API_KEY`) en los *Secrets* de la app. Se "
+                st.info("Modo sin LLM: falta `NVIDIA_API_KEY`, `OPENAI_API_KEY` o `ANTHROPIC_API_KEY` en los *Secrets*. Se "
                         "muestran los hechos más relevantes que recuperó el grafo; con la clave, el LLM los convierte "
                         "en una respuesta.")
                 relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]

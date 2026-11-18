@@ -364,3 +364,37 @@ def responder_con_openai(pregunta: str, ctx: Contexto, api_key: str, modelo: str
         return {"texto": None, "error": "No se pudo conectar con la API de OpenAI."}
     texto = (r.output_text or "").strip()
     return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}
+
+
+# ------------------------------------------------------------ 5c. generación con NVIDIA (API compatible con OpenAI)
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+NVIDIA_MODELO_POR_DEFECTO = "meta/llama-3.3-70b-instruct"
+
+
+def responder_con_nvidia(pregunta: str, ctx: Contexto, api_key: str, modelo: str = NVIDIA_MODELO_POR_DEFECTO) -> dict:
+    """NVIDIA build.nvidia.com expone modelos abiertos con la API de Chat Completions de OpenAI."""
+    import openai
+
+    cliente = openai.OpenAI(api_key=api_key, base_url=NVIDIA_BASE_URL)
+    try:
+        r = cliente.chat.completions.create(
+            model=modelo,
+            messages=[{"role": "system", "content": SISTEMA},
+                      {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}],
+            max_tokens=2048,
+            temperature=0.2,
+        )
+    except openai.AuthenticationError:
+        return {"texto": None, "error": "La clave NVIDIA_API_KEY no es válida (debe empezar con «nvapi-»)."}
+    except openai.PermissionDeniedError:
+        return {"texto": None, "error": "La clave no tiene permiso para usar este modelo de NVIDIA."}
+    except openai.NotFoundError:
+        return {"texto": None, "error": f"El modelo «{modelo}» no está disponible en NVIDIA. Cambia NVIDIA_MODEL en Secrets."}
+    except openai.RateLimitError:
+        return {"texto": None, "error": "Límite de solicitudes o de créditos de NVIDIA alcanzado. Espera un minuto."}
+    except openai.APIStatusError as ex:
+        return {"texto": None, "error": f"Error de la API de NVIDIA ({ex.status_code}): {ex.message}"}
+    except openai.APIConnectionError:
+        return {"texto": None, "error": "No se pudo conectar con la API de NVIDIA."}
+    texto = (r.choices[0].message.content or "").strip() if r.choices else ""
+    return {"texto": texto or None, "error": None if texto else "La respuesta llegó vacía.", "modelo": r.model}
