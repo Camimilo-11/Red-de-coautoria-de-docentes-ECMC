@@ -3,6 +3,7 @@
 Ejecutar:  streamlit run app.py
 """
 import pickle
+import time
 from pathlib import Path
 
 import networkx as nx
@@ -342,6 +343,11 @@ def respuesta_cacheada(pregunta, contexto_txt, proveedor, modelo, _ctx, _clave):
     return r
 
 
+@st.cache_resource
+def cache_respuestas():
+    return {}     # (pregunta, contexto, proveedor, modelo) -> respuesta; compartida entre visitantes
+
+
 EJEMPLOS = [
     "¿Quién de Computación trabaja en visión computacional y ha colaborado con alguien de Matemáticas?",
     "¿Cómo está conectado Hugo Leiva con Diego Peluffo?",
@@ -388,31 +394,6 @@ with tab_rag:
         ctx = indice.recuperar(consulta)
         e = ctx.entidades
         col_resp, col_graf = st.columns([5, 4])
-        with col_resp:
-            st.markdown(f"**Pregunta:** {consulta}")
-            if clave:
-                with st.spinner(f"Consultando al LLM ({modelo_llm})…"):
-                    try:
-                        r = respuesta_cacheada(consulta, ctx.texto(), proveedor, modelo_llm, ctx, clave)
-                    except RuntimeError as ex:
-                        r = {"texto": None, "error": str(ex)}
-                if r["texto"]:
-                    st.markdown(r["texto"])
-                    st.caption(f"Generado por {r.get('modelo', modelo_llm)} a partir de {len(ctx.hechos)} hechos "
-                               "recuperados del grafo. Los números entre corchetes remiten al contexto (abajo).")
-                else:
-                    st.error(r["error"])
-            else:
-                st.info("Modo sin LLM: falta una clave (`GEMINI_API_KEY`, `NVIDIA_API_KEY`, `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`) en los *Secrets*. Se "
-                        "muestran los hechos más relevantes que recuperó el grafo; con la clave, el LLM los convierte "
-                        "en una respuesta.")
-                relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]
-                for h in relevantes[:10]:
-                    st.markdown(f"- {h.replace('; [semilla].', '.')}")
-            chips = ([f"👤 {nombre_de[d]}" for d in e["docentes"]] + [f"🏛️ {d}" for d in e["departamentos"]]
-                     + [f"🏷️ {indice.sub_nombre[s]}" for s in e["sublineas"][:6]]
-                     + [f"🎯 {i}" for i in e["intenciones"]])
-            st.caption("Entidades detectadas: " + (" · ".join(chips) if chips else "ninguna (se usan los docentes más conectados)"))
         with col_graf:
             semillas = set(ctx.semillas)
             en_camino = {tuple(sorted(p)) for c in ctx.caminos if c[1] is not None for p in zip(c, c[1:])}
@@ -433,5 +414,48 @@ with tab_rag:
             components.html(sub.generate_html(), height=480)
             st.caption("Subgrafo recuperado · nodos grandes con borde = semillas · línea gruesa oscura = camino entre "
                        "docentes nombrados · punteado violeta = colaboración predicha.")
+        with col_resp:
+            st.markdown(f"**Pregunta:** {consulta}")
+            if clave:
+                t0 = time.perf_counter()
+                llave = (consulta, ctx.texto(), proveedor, modelo_llm)
+                guardadas = cache_respuestas()
+                if llave in guardadas:                         # ya respondida: instantáneo y sin gastar cuota
+                    r = guardadas[llave]
+                    st.markdown(r["texto"])
+                elif proveedor in ("gemini", "nvidia"):        # streaming: el texto aparece mientras se genera
+                    with st.spinner(f"Conectando con {modelo_llm}…"):
+                        r = R.responder_compatible(proveedor, consulta, ctx, clave, modelo_llm, stream=True)
+                    if r.get("stream"):
+                        texto = st.write_stream(r["stream"])
+                        r = {"texto": texto if isinstance(texto, str) else "".join(texto), "modelo": r["modelo"],
+                             "error": None}
+                        if r["texto"].strip():
+                            guardadas[llave] = r
+                else:
+                    with st.spinner(f"Consultando al LLM ({modelo_llm})…"):
+                        try:
+                            r = respuesta_cacheada(consulta, ctx.texto(), proveedor, modelo_llm, ctx, clave)
+                        except RuntimeError as ex:
+                            r = {"texto": None, "error": str(ex)}
+                    if r["texto"]:
+                        st.markdown(r["texto"])
+                if r.get("texto"):
+                    st.caption(f"Generado por {r.get('modelo', modelo_llm)} en {time.perf_counter() - t0:.1f} s a partir "
+                               f"de {len(ctx.hechos)} hechos recuperados del grafo. Los números entre corchetes "
+                               "remiten al contexto (abajo).")
+                else:
+                    st.error(r["error"])
+            else:
+                st.info("Modo sin LLM: falta una clave (`GEMINI_API_KEY`, `NVIDIA_API_KEY`, `OPENAI_API_KEY` o `ANTHROPIC_API_KEY`) en los *Secrets*. Se "
+                        "muestran los hechos más relevantes que recuperó el grafo; con la clave, el LLM los convierte "
+                        "en una respuesta.")
+                relevantes = [h for h in ctx.hechos[1:] if "[semilla]" in h or h.startswith(("Camino", "Predicción"))]
+                for h in relevantes[:10]:
+                    st.markdown(f"- {h.replace('; [semilla].', '.')}")
+            chips = ([f"👤 {nombre_de[d]}" for d in e["docentes"]] + [f"🏛️ {d}" for d in e["departamentos"]]
+                     + [f"🏷️ {indice.sub_nombre[s]}" for s in e["sublineas"][:6]]
+                     + [f"🎯 {i}" for i in e["intenciones"]])
+            st.caption("Entidades detectadas: " + (" · ".join(chips) if chips else "ninguna (se usan los docentes más conectados)"))
         with st.expander(f"Contexto recuperado que recibe el LLM ({len(ctx.hechos)} hechos)"):
             st.text(ctx.texto())

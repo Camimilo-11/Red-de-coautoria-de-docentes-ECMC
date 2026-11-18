@@ -392,17 +392,25 @@ _modelo_ok = {}                 # (proveedor, clave) -> modelo que respondió
 
 
 def _candidatos(cliente, conf, preferido):
+    """Primero el modelo preferido (sin consultar nada). Solo si falla se pide la lista de modelos."""
     lista = list(dict.fromkeys(m for m in [preferido] + conf["candidatos"] if m))
+    yield lista[0]
+    probados = {lista[0]}
     try:
         disponibles = [m.id.removeprefix("models/") for m in cliente.models.list()]
     except Exception:
-        return lista
-    if not disponibles:
-        return lista
-    elegidos = [m for m in lista if m in disponibles]
-    extra = [m for m in disponibles if not any(t in m.lower() for t in _NO_CHAT)
-             and any(t in m.lower() for t in conf["claves_chat"])]
-    return list(dict.fromkeys(elegidos + extra))[:8] or lista
+        disponibles = []
+    if disponibles:
+        elegidos = [m for m in lista if m in disponibles]
+        extra = [m for m in disponibles if not any(t in m.lower() for t in _NO_CHAT)
+                 and any(t in m.lower() for t in conf["claves_chat"])]
+        orden = list(dict.fromkeys(elegidos + extra))[:8] or lista
+    else:
+        orden = lista
+    for m in orden:
+        if m not in probados:
+            probados.add(m)
+            yield m
 
 
 def _parametros_extra(proveedor, modelo):
@@ -413,20 +421,24 @@ def _parametros_extra(proveedor, modelo):
     return {}
 
 
-def responder_compatible(proveedor: str, pregunta: str, ctx: Contexto, api_key: str, modelo: str | None = None) -> dict:
+def responder_compatible(proveedor: str, pregunta: str, ctx: Contexto, api_key: str, modelo: str | None = None,
+                         stream: bool = False) -> dict:
+    """Con stream=True devuelve {"stream": generador de texto, "modelo": ...} para mostrar la respuesta mientras
+    se genera; los errores de modelo (404/403/410) se detectan antes del primer fragmento, así que el respaldo
+    entre modelos sigue funcionando."""
     import openai
 
     conf = PROVEEDORES[proveedor]
     nombre = conf["nombre"]
-    cliente = openai.OpenAI(api_key=api_key, base_url=conf["base_url"])
+    cliente = openai.OpenAI(api_key=api_key, base_url=conf["base_url"], timeout=60, max_retries=0)   # sin reintentos ocultos: se pasa al siguiente modelo
     mensajes = [{"role": "system", "content": SISTEMA},
                 {"role": "user", "content": f"<contexto>\n{ctx.texto()}\n</contexto>\n\nPregunta: {pregunta}"}]
     preferido = _modelo_ok.get((proveedor, api_key)) or modelo
-    retirados, sin_permiso = [], []
+    retirados, sin_permiso, saturados = [], [], []
     for m in _candidatos(cliente, conf, preferido):
         try:
-            r = cliente.chat.completions.create(model=m, messages=mensajes, max_tokens=4096, temperature=0.2,
-                                                **_parametros_extra(proveedor, m))
+            r = cliente.chat.completions.create(model=m, messages=mensajes, max_tokens=2048, temperature=0.2,
+                                                stream=stream, **_parametros_extra(proveedor, m))
         except (openai.NotFoundError, openai.BadRequestError) as ex:
             if "api key" in str(ex).lower() or "api_key" in str(ex).lower():   # Gemini responde 400 si la clave es mala
                 return {"texto": None, "error": f"{nombre} rechazó la clave: no es válida. Revisa {conf['secreto']} en Secrets."}
@@ -442,15 +454,28 @@ def responder_compatible(proveedor: str, pregunta: str, ctx: Contexto, api_key: 
             if ex.status_code == 403:      # la cuenta no tiene acceso a ESTE modelo: probar el siguiente
                 sin_permiso.append(m)
                 continue
-            if ex.status_code == 429:
-                return {"texto": None, "error": f"Límite de solicitudes o de cuota de {nombre}. Espera un minuto."}
+            if ex.status_code >= 500 or ex.status_code == 429:   # modelo saturado (503) o con cuota agotada: otro
+                saturados.append(f"{m} ({ex.status_code})")
+                continue
             return {"texto": None, "error": f"Error de la API de {nombre} ({ex.status_code}) con «{m}»: {ex.message}"}
+        except openai.APITimeoutError:
+            saturados.append(f"{m} (sin respuesta)")
+            continue
         except openai.APIConnectionError:
             return {"texto": None, "error": f"No se pudo conectar con la API de {nombre}."}
+        _modelo_ok[(proveedor, api_key)] = m
+        if stream:
+            def fragmentos(respuesta=r):
+                try:
+                    for chunk in respuesta:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            yield chunk.choices[0].delta.content
+                except Exception as ex:          # corte a mitad de la respuesta
+                    yield f"\n\n_(La respuesta se interrumpió: {type(ex).__name__})_"
+            return {"stream": fragmentos(), "texto": None, "error": None, "modelo": m}
         texto = (r.choices[0].message.content or "") if r.choices else ""
         texto = re.sub(r"<think>.*?</think>", "", texto, flags=re.S).strip()
         if texto:
-            _modelo_ok[(proveedor, api_key)] = m
             return {"texto": texto, "error": None, "modelo": m}
         retirados.append(m)
     detalle = []
@@ -458,13 +483,17 @@ def responder_compatible(proveedor: str, pregunta: str, ctx: Contexto, api_key: 
         detalle.append("retirados o no disponibles: " + ", ".join(retirados))
     if sin_permiso:
         detalle.append("sin permiso para tu cuenta (403): " + ", ".join(sin_permiso))
-    return {"texto": None, "error": f"Ningún modelo de {nombre} respondió (" + "; ".join(detalle) + "). Si todos "
-            "dan 403, la cuenta dueña de la clave no tiene habilitada la generación de respuestas."}
+    if saturados:
+        detalle.append("saturados o sin cuota en este momento: " + ", ".join(saturados))
+    sugerencia = ("Los servidores están ocupados o se agotó la cuota gratuita: espera un minuto y vuelve a preguntar."
+                  if saturados and not sin_permiso else
+                  "Si todos dan 403, la cuenta dueña de la clave no tiene habilitada la generación de respuestas.")
+    return {"texto": None, "error": f"Ningún modelo de {nombre} respondió (" + "; ".join(detalle) + "). " + sugerencia}
 
 
-def responder_con_nvidia(pregunta, ctx, api_key, modelo=None):
-    return responder_compatible("nvidia", pregunta, ctx, api_key, modelo)
+def responder_con_nvidia(pregunta, ctx, api_key, modelo=None, stream=False):
+    return responder_compatible("nvidia", pregunta, ctx, api_key, modelo, stream)
 
 
-def responder_con_gemini(pregunta, ctx, api_key, modelo=None):
-    return responder_compatible("gemini", pregunta, ctx, api_key, modelo)
+def responder_con_gemini(pregunta, ctx, api_key, modelo=None, stream=False):
+    return responder_compatible("gemini", pregunta, ctx, api_key, modelo, stream)
